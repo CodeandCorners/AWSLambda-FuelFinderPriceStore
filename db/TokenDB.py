@@ -1,4 +1,4 @@
-import time
+from datetime import datetime
 
 def saveAccessToken(
     bearer_token: str,
@@ -6,13 +6,13 @@ def saveAccessToken(
     dynamoDb
 ) -> None:
     table = dynamoDb.Table("api-tokens")
-    expires_at = int(time.time()) + expires_in
+    expires_at = int(datetime.now().timestamp()) + expires_in
 
     table.put_item(
         Item={
             "id": "fuel-finder-access-token",
             "bearer_token": bearer_token,
-            "expires_at": expires_at,
+            "insertedAt": str(int(datetime.now().timestamp())),
             "ttl": expires_at
         }
     )
