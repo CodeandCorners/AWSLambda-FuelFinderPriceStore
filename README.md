@@ -67,7 +67,7 @@ API Response models from fuel finder last checked 5th August 2026
     ]
 }
 ```
-- set timeout in AWS
+- set timeout in AWS to ~<1 min
 
 ## Key config
 - tokenTTLInSeconds = 1800 # set to 30 mins, token expires in 60, safeguard
