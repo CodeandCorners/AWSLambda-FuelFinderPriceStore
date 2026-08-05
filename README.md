@@ -3,6 +3,8 @@ Lambda to update fuel prices from gov uk API, hypothetically once a day, ttl set
 
 API Response models from fuel finder last checked 5th August 2026
 
+Related to https://github.com/CodeandCorners/AWSLambda-FuelFinderStationStore and shares Auth Token secret and DB current.
+
 ## How to
 - create one login dev account
 - setup application for fuel finder api
