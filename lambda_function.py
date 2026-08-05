@@ -1,17 +1,25 @@
+from datetime import datetime, time
 import json
+from typing import List
 from urllib import response
+from models.FuelPriceDataClasses import FuelPriceDBRecord, FuelPriceStationHttpResponse, convertFuelPriceHttpResponseToDBRecord
+from models.FuelAuthDataClasses import BearerTokenResponse
 import boto3
 import urllib3
-from TokenDB import saveAccessToken, getAccessToken
-from FuelFinderConnector import getFuelFinderOAuthAccessToken, getFuelPriceData
+from db.TokenDB import saveAccessToken, getAccessToken
+from db.FuelPriceDB import saveFuelPrices
+from connectors.FuelFinderOAuthConnector import getFuelFinderOAuthAccessToken
+from connectors.FuelFinderPricesConnector import getFuelPriceData
 
 
 # HTTP
+maxBatchNumberForFuelPricesApi = 99
 secrets = boto3.client("secretsmanager")
 http = urllib3.PoolManager()
 
 # DB
-ttlInSeconds = 1800
+tokenTTLInSeconds = 1800
+maxBatchNumberForFuelPricesApi = 99
 dynamodb = boto3.resource("dynamodb")
 
 
@@ -23,28 +31,49 @@ def getOAuthSecretsForFuelFinderApi() -> dict[str, str]:
     return json.loads(response["SecretString"])
 
 
-
-def getBearerToken(accessToken: dict[str,str]) -> str:  
-    return accessToken["data"]["access_token"]
-
-
-def retrieveOrSaveBearerToken() -> str:
+def retrieveOrSaveBearerToken() -> BearerTokenResponse:
     accessToken = getAccessToken(dynamodb)
     if accessToken is not None:
-        return accessToken
+        print("Access token found in DB, no API call needed")
+        return BearerTokenResponse(accessToken)
     else:
+        print("No access token found in DB, making API call")
         secret = getOAuthSecretsForFuelFinderApi()
         clientId = secret["client_id"]
         clientSecret = secret["client_secret"]
-        fuelFinderOAuthAccessToken: dict[str,str] = getFuelFinderOAuthAccessToken(clientId, clientSecret, http)
-        print(fuelFinderOAuthAccessToken)
-        fuelFinderBearerToken = getBearerToken(fuelFinderOAuthAccessToken)
-        print(f"Retrieved new bearer token: {fuelFinderBearerToken}")
-        saveAccessToken(fuelFinderBearerToken, ttlInSeconds, dynamodb)
+        fuelFinderBearerToken: BearerTokenResponse = getFuelFinderOAuthAccessToken(clientId, clientSecret, http)
+        
+        saveAccessToken(fuelFinderBearerToken.bearerToken, tokenTTLInSeconds, dynamodb)
         return fuelFinderBearerToken
+
+def fuelPriceGetAndInsert(bearerToken: BearerTokenResponse, batchNumber: int, createdAt: int, ttl: int) -> bool:
+    fuelPriceData: List[FuelPriceStationHttpResponse] = getFuelPriceData(bearerToken, http, batchNumber)
+
+    if len(fuelPriceData) > 0:
+        convertedData: List[FuelPriceDBRecord] = [
+            convertFuelPriceHttpResponseToDBRecord(station, createdAt, ttl)
+            for station in fuelPriceData
+        ]
+        saveFuelPrices(convertedData, dynamodb)
+    return len(fuelPriceData) > 0
+
+def fuelPriceInsertOrchestrator(bearerToken: BearerTokenResponse):
+    now = datetime.now()
+    dateTimeNow: int = int(now.timestamp())
+    ttlOfDataRetrieved: int = int(datetime.combine(now.date(), time(23, 59, 59)).timestamp())
+ 
+    batchNumber = 1
+    while batchNumber <= maxBatchNumberForFuelPricesApi:
+        print(f"Processing batch number {batchNumber}")
+        hasDataInBatch: bool = fuelPriceGetAndInsert(bearerToken, batchNumber, dateTimeNow, ttlOfDataRetrieved)
+        if not hasDataInBatch:
+            print(f"No data returned for batch number {batchNumber}, stopping processing")
+            break
+        batchNumber += 1
 
 def lambda_handler(event, context):
  
     fuelFinderBearerToken = retrieveOrSaveBearerToken()
-    response = getFuelPriceData(fuelFinderBearerToken, http)
-    print(response)
+    fuelPriceInsertOrchestrator(fuelFinderBearerToken)
+    return "Updated fuel-prices in DynamoDB"
+
